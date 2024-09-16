@@ -12,7 +12,7 @@ from viam.resource.base import ResourceBase
 from viam.resource.types import Model, ModelFamily
 from viam.components.camera import Camera, ViamImage
 from viam.media.utils.pil import viam_to_pil_image
-from viam.utils import struct_to_dict, from_dm_from_extra
+from viam.utils import struct_to_dict, from_dm_from_extra, ValueTypes
 from viam.errors import NoCaptureToStoreError
 
 
@@ -47,15 +47,6 @@ class MyVision(Vision):
         self.label_confidence = config_dict["label_confidence"]
         pass
 
-    async def get_cam_image(
-        self,
-        camera_name: str
-    ) -> ViamImage:
-        actual_cam = self.DEPS[Camera.get_resource_name(camera_name)]
-        cam = cast(Camera, actual_cam)
-        cam_image = await cam.get_image(mime_type="image/jpeg")
-        return cam_image
-
     async def get_model_detection(
         self,
         vision_name: str,
@@ -74,7 +65,15 @@ class MyVision(Vision):
     async def get_detections_from_camera(
         self, camera_name: str, *, extra: Optional[Mapping[str, Any]] = None, timeout: Optional[float] = None
     ) -> List[Detection]:
-        return await self.get_model_detection(self.base_vision_name, await self.get_cam_image(camera_name))
+        actual_model = self.DEPS[Vision.get_resource_name(self.base_vision_name)]
+        vision = cast(Vision, actual_model)
+        detections = await vision.get_detections_from_camera(camera_name)
+        
+        # Filter detections based on valid labels
+        filtered_detections = [d for d in detections if d.class_name in self.valid_labels]
+
+        # Ensure that detections is returned
+        return filtered_detections
  
     async def get_detections(
         self,
@@ -83,7 +82,15 @@ class MyVision(Vision):
         extra: Optional[Mapping[str, Any]] = None,
         timeout: Optional[float] = None,
     ) -> List[Detection]:
-        return await self.get_model_detection(self.base_vision_name, image)
+        actual_model = self.DEPS[Vision.get_resource_name(self.base_vision_name)]
+        vision = cast(Vision, actual_model)
+        detections = await vision.get_detections(image)
+        
+        # Filter detections based on valid labels
+        filtered_detections = [d for d in detections if d.class_name in self.valid_labels]
+
+        # Ensure that detections is returned
+        return filtered_detections
     
     async def get_classifications_from_camera(
         self,
@@ -93,7 +100,37 @@ class MyVision(Vision):
         extra: Optional[Mapping[str, Any]] = None,
         timeout: Optional[float] = None,
     ) -> List[Classification]:
-        return await self.get_classifications(await self.get_cam_image(camera_name))
+        classifications = []
+        # Await the coroutine to get the detections list
+        detections = await self.get_classifications_from_camera(camera_name)
+
+        # Check if detections is None or empty
+        if detections is None:
+            # Log or handle the case when no detections are returned
+            return classifications  # Return an empty list
+
+        for detection in detections:
+            if detection.class_name in self.valid_labels and detection.confidence >= self.label_confidence:
+                # Extract the bounding box coordinates from the Viam detection
+                x_min = detection.x_min
+                y_min = detection.y_min
+                x_max = detection.x_max
+                y_max = detection.y_max
+                confidence = detection.confidence
+
+                # Calculate height and width of the bounding box
+                height = y_max - y_min
+                width = x_max - x_min
+
+                # Create a Classification object based on bounding box dimensions
+                classification = Classification()
+                classification.confidence = confidence
+                classification.class_name = 'No fall' if height > width else 'Fall'
+                
+                # Add the Classification object to the list
+                classifications.append(classification)
+
+        return classifications
 
     
     async def get_classifications(
@@ -121,7 +158,6 @@ class MyVision(Vision):
                 x_max = detection.x_max
                 y_max = detection.y_max
                 confidence = detection.confidence
-                class_detect = detection.class_name
 
                 # Calculate height and width of the bounding box
                 height = y_max - y_min
@@ -159,13 +195,13 @@ class MyVision(Vision):
         timeout: Optional[float] = None,
     ) -> CaptureAllResult:
         result = CaptureAllResult()
-        result.image = await self.get_cam_image(camera_name)
+        actual_camera = self.DEPS[Camera.get_resource_name(camera_name)]
+        camera = cast(Camera, actual_camera)
+        result.image = await camera.get_image(mime_type="image/jpeg")
         result.detections = await self.get_detections(result.image)
         result.classifications = await self.get_classifications(result.image, 1)
-        LOGGER.info("capture_all_from_camera is called")
         # Check if the call is from the data manager
         if from_dm_from_extra(extra):
-            LOGGER.info("capture_all_from_camera is called from dm")
             # Check for classifications of type "Fall"
             has_fall_classification = any(
                 classification.class_name == "Fall" for classification in result.classifications
@@ -174,7 +210,6 @@ class MyVision(Vision):
             # Raise NoCaptureToStoreError if no "Fall" classification is found
             if not has_fall_classification:
                 raise NoCaptureToStoreError
-            LOGGER.info("Fall seen")
         return result
 
     async def get_properties(
