@@ -1,0 +1,12 @@
+{
+  "module_name": "viam-fall-detector",
+  "namespace": "bill",
+  "language": "python",
+  "resource_type": "service",
+  "resource_subtype": "vision",
+  "model_name": "fall",
+  "enable_cloud_build": true,
+  "initialize_git": false,
+  "generator_version": "0.1.0",
+  "generated_on": "2025-04-08T15:26:06.199842Z"
+}
